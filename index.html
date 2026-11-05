@@ -869,6 +869,7 @@
 
   var CHANNELS = [
     { id:'qr',      group:'dinein',   name:'收款码',   short:'收款码', color:'#F1592B' },
+    { id:'cash',    group:'dinein',   name:'现金',     short:'现金',   color:'#8A7A6D', moneyOnly:true },
     { id:'groupon', group:'dinein',   name:'团购',     short:'团购',   color:'#F9A03F' },
     { id:'meituan', group:'delivery', name:'美团',     short:'美团',   color:'#FFC300' },
     { id:'taobao',  group:'delivery', name:'淘宝闪购', short:'淘宝闪购', color:'#FF6A00' },
@@ -976,9 +977,11 @@
   function blankRec(date){
     var rec = { date: date, note: '', ch: {}, updatedAt: 0 };
     CHANNELS.forEach(function(c){
-      rec.ch[c.id] = c.group === 'delivery'
-        ? { rev:'', cnt:'', visit:'', order:'' }
-        : { rev:'', cnt:'' };
+      rec.ch[c.id] = c.moneyOnly
+        ? { rev:'' }
+        : (c.group === 'delivery'
+            ? { rev:'', cnt:'', visit:'', order:'' }
+            : { rev:'', cnt:'' });
     });
     return rec;
   }
@@ -1002,8 +1005,9 @@
     return r ? normalize(r, date) : blankRec(date);
   }
 
-  function chStat(c){
-    var rev = num(c.rev), cnt = num(c.cnt);
+  function chStat(c, conf){
+    var rev = num(c.rev);
+    var cnt = (conf && conf.moneyOnly) ? 0 : num(c.cnt);
     return {
       rev: rev,
       cnt: cnt,
@@ -1011,22 +1015,31 @@
     };
   }
   function statOf(rec){
-    var s = { dinein:{ rev:0, cnt:0 }, delivery:{ rev:0, cnt:0 }, ch:{}, total:{ rev:0, cnt:0 } };
+    var s = {
+      dinein:{ rev:0, cnt:0, billable:0 },
+      delivery:{ rev:0, cnt:0, billable:0 },
+      ch:{},
+      total:{ rev:0, cnt:0, billable:0 }
+    };
     CHANNELS.forEach(function(c){
-      var st = chStat(rec.ch[c.id] || {});
+      var raw = rec.ch[c.id] || {};
+      var st = chStat(raw, c);
       var withConv = Object.assign({}, st, {
-        visit: num((rec.ch[c.id]||{}).visit),
-        order: num((rec.ch[c.id]||{}).order)
+        visit: num(raw.visit),
+        order: num(raw.order)
       });
       s.ch[c.id] = withConv;
       s[c.group].rev += st.rev;
       s[c.group].cnt += st.cnt;
+      /* billable：只统计有单量的渠道营收，现金仅记金额，不参与客单价 */
+      if (!c.moneyOnly) s[c.group].billable += st.rev;
     });
     s.total.rev = s.dinein.rev + s.delivery.rev;
     s.total.cnt = s.dinein.cnt + s.delivery.cnt;
-    s.dinein.avg = s.dinein.cnt > 0 ? s.dinein.rev / s.dinein.cnt : 0;
-    s.delivery.avg = s.delivery.cnt > 0 ? s.delivery.rev / s.delivery.cnt : 0;
-    s.total.avg = s.total.cnt > 0 ? s.total.rev / s.total.cnt : 0;
+    s.total.billable = s.dinein.billable + s.delivery.billable;
+    s.dinein.avg = s.dinein.cnt > 0 ? s.dinein.billable / s.dinein.cnt : 0;
+    s.delivery.avg = s.delivery.cnt > 0 ? s.delivery.billable / s.delivery.cnt : 0;
+    s.total.avg = s.total.cnt > 0 ? s.total.billable / s.total.cnt : 0;
     return s;
   }
 
@@ -1078,7 +1091,17 @@
     var di = '', de = '';
 
     CHANNELS.forEach(function(c){
-      if (c.group === 'dinein') {
+      if (c.group === 'dinein' && c.moneyOnly) {
+        di += '' +
+          '<div class="card chan" data-chan="' + c.id + '">' +
+            '<div class="chan-head">' +
+              '<i class="dot" style="background:' + c.color + '"></i>' + esc(c.name) +
+              '<span class="tag" data-tag="' + c.id + '">只记金额</span>' +
+            '</div>' +
+            fieldHTML(c.id + '.rev', '现金营业额', '¥', '', { ph:'0.00' }) +
+            '<div class="avg"><span>不记单量，不计入客单价</span></div>' +
+          '</div>';
+      } else if (c.group === 'dinein') {
         di += '' +
           '<div class="card chan" data-chan="' + c.id + '">' +
             '<div class="chan-head">' +
@@ -1258,7 +1281,8 @@
     }).sort();
 
     var agg = { days: 0, daysWithData: 0,
-      ch: {}, dinein:{ rev:0, cnt:0 }, delivery:{ rev:0, cnt:0 }, total:{ rev:0, cnt:0 } };
+      ch: {}, dinein:{ rev:0, cnt:0, billable:0 }, delivery:{ rev:0, cnt:0, billable:0 },
+      total:{ rev:0, cnt:0, billable:0 } };
 
     CHANNELS.forEach(function(c){ agg.ch[c.id] = { rev:0, cnt:0, visitSum:0, visitW:0, orderSum:0, orderW:0 }; });
 
@@ -1285,13 +1309,16 @@
       agg.dinein.rev += s.dinein.rev; agg.dinein.cnt += s.dinein.cnt;
       agg.delivery.rev += s.delivery.rev; agg.delivery.cnt += s.delivery.cnt;
       agg.total.rev += s.total.rev; agg.total.cnt += s.total.cnt;
+      agg.dinein.billable += s.dinein.billable;
+      agg.delivery.billable += s.delivery.billable;
+      agg.total.billable += s.total.billable;
       series.push({ date: d, rev: s.total.rev });
     });
 
     agg.days = totalDays;
-    agg.total.avg = agg.total.cnt > 0 ? agg.total.rev / agg.total.cnt : 0;
-    agg.dinein.avg = agg.dinein.cnt > 0 ? agg.dinein.rev / agg.dinein.cnt : 0;
-    agg.delivery.avg = agg.delivery.cnt > 0 ? agg.delivery.rev / agg.delivery.cnt : 0;
+    agg.total.avg = agg.total.cnt > 0 ? agg.total.billable / agg.total.cnt : 0;
+    agg.dinein.avg = agg.dinein.cnt > 0 ? agg.dinein.billable / agg.dinein.cnt : 0;
+    agg.delivery.avg = agg.delivery.cnt > 0 ? agg.delivery.billable / agg.delivery.cnt : 0;
 
     agg.channels = CHANNELS.map(function(c){
       var a = agg.ch[c.id];
@@ -1583,6 +1610,7 @@
     if (!dates.length) { toast('还没有数据可以导出'); return; }
 
     var head = ['日期','收款码营业额','收款码客单量','收款码客单价',
+                '现金营业额',
                 '团购营业额','团购客单量','团购客单价',
                 '美团营业额','美团单量','美团进店转化率(%)','美团下单转化率(%)',
                 '淘宝闪购营业额','淘宝闪购单量','淘宝闪购进店转化率(%)','淘宝闪购下单转化率(%)',
@@ -1594,10 +1622,11 @@
       var rec = normalize(Store.read().reports[d], d);
       var s = statOf(rec);
       var row = [d];
-      ['qr','groupon'].forEach(function(k){
-        var st = s.ch[k];
-        row.push(st.rev.toFixed(2), st.cnt, st.avg.toFixed(2));
-      });
+      var qr = s.ch.qr;
+      row.push(qr.rev.toFixed(2), qr.cnt, qr.avg.toFixed(2));
+      row.push(s.ch.cash.rev.toFixed(2));
+      var gp = s.ch.groupon;
+      row.push(gp.rev.toFixed(2), gp.cnt, gp.avg.toFixed(2));
       ['meituan','taobao','jd'].forEach(function(k){
         var st = s.ch[k];
         row.push(st.rev.toFixed(2), st.cnt, st.visit.toFixed(2), st.order.toFixed(2));
@@ -1677,6 +1706,7 @@
       var rec = blankRec(d);
       rec.ch.qr.rev = round2(qrAvg * qrCnt).toFixed(2);
       rec.ch.qr.cnt = String(qrCnt);
+      rec.ch.cash.rev = round2(rand(110, 320) * holidayBoost * noise).toFixed(2);
       rec.ch.groupon.rev = round2(gpAvg * gpCnt).toFixed(2);
       rec.ch.groupon.cnt = String(gpCnt);
 
