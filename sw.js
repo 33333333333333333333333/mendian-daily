@@ -1,5 +1,5 @@
 /* 门店经营日报 · 离线缓存 */
-var CACHE = 'store-report-v1';
+var CACHE = 'store-report-v2';
 var ASSETS = [
   './',
   './index.html',

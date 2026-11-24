@@ -320,6 +320,7 @@
   }
 
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+  .chan.wide{grid-column:1 / -1;}
 
   /* ---------- 空状态 ---------- */
   .empty{
@@ -672,7 +673,7 @@
       <div class="hero-sub">
         <div>堂食<b id="heroDinein">¥0</b></div>
         <div>外卖<b id="heroDelivery">¥0</b></div>
-        <div>总单量<b id="heroOrders">0 <i>单</i></b></div>
+        <div>客单价<b id="heroAvg">¥0.00</b></div>
       </div>
     </div>
 
@@ -691,7 +692,7 @@
         <span class="hint">分平台填写</span>
         <span class="sum" id="sumDelivery">¥0</span>
       </div>
-      <div id="deliveryCards" style="display:flex;flex-direction:column;gap:11px;"></div>
+      <div class="two" id="deliveryCards"></div>
     </section>
 
     <div class="footnote">数据自动保存 · 换台设备请用「导出备份」</div>
@@ -731,14 +732,6 @@
     </div>
 
     <div class="table" id="detailTable"></div>
-
-    <div class="chart-card">
-      <div class="chart-title">
-        <span>外卖转化</span>
-        <em>按单量加权</em>
-      </div>
-      <div class="bars" id="convBars"></div>
-    </div>
 
     <div class="footnote" id="sumFootnote">—</div>
   </main>
@@ -870,10 +863,10 @@
   var CHANNELS = [
     { id:'qr',      group:'dinein',   name:'收款码',   short:'收款码', color:'#F1592B' },
     { id:'cash',    group:'dinein',   name:'现金',     short:'现金',   color:'#8A7A6D', moneyOnly:true },
-    { id:'groupon', group:'dinein',   name:'团购',     short:'团购',   color:'#F9A03F' },
-    { id:'meituan', group:'delivery', name:'美团',     short:'美团',   color:'#FFC300' },
-    { id:'taobao',  group:'delivery', name:'淘宝闪购', short:'淘宝闪购', color:'#FF6A00' },
-    { id:'jd',      group:'delivery', name:'京东',     short:'京东',   color:'#E33A3A' }
+    { id:'groupon', group:'dinein',   name:'团购',     short:'团购',   color:'#F9A03F', moneyOnly:true },
+    { id:'meituan', group:'delivery', name:'美团',     short:'美团',   color:'#FFC300', moneyOnly:true },
+    { id:'taobao',  group:'delivery', name:'淘宝闪购', short:'淘宝闪购', color:'#FF6A00', moneyOnly:true },
+    { id:'jd',      group:'delivery', name:'京东',     short:'京东',   color:'#E33A3A', moneyOnly:true }
   ];
   var CH = {};
   CHANNELS.forEach(function(c){ CH[c.id] = c; });
@@ -977,11 +970,7 @@
   function blankRec(date){
     var rec = { date: date, note: '', ch: {}, updatedAt: 0 };
     CHANNELS.forEach(function(c){
-      rec.ch[c.id] = c.moneyOnly
-        ? { rev:'' }
-        : (c.group === 'delivery'
-            ? { rev:'', cnt:'', visit:'', order:'' }
-            : { rev:'', cnt:'' });
+      rec.ch[c.id] = c.moneyOnly ? { rev:'' } : { rev:'', cnt:'' };
     });
     return rec;
   }
@@ -1022,16 +1011,11 @@
       total:{ rev:0, cnt:0, billable:0 }
     };
     CHANNELS.forEach(function(c){
-      var raw = rec.ch[c.id] || {};
-      var st = chStat(raw, c);
-      var withConv = Object.assign({}, st, {
-        visit: num(raw.visit),
-        order: num(raw.order)
-      });
-      s.ch[c.id] = withConv;
+      var st = chStat(rec.ch[c.id] || {}, c);
+      s.ch[c.id] = st;
       s[c.group].rev += st.rev;
       s[c.group].cnt += st.cnt;
-      /* billable：只统计有单量的渠道营收，现金仅记金额，不参与客单价 */
+      /* billable：只统计有笔数的渠道营收，现金/团购/外卖仅记金额，不参与客单价 */
       if (!c.moneyOnly) s[c.group].billable += st.rev;
     });
     s.total.rev = s.dinein.rev + s.delivery.rev;
@@ -1085,47 +1069,45 @@
       '</div>';
   }
 
+  function moneyCard(c, label){
+    var tag = c.group === 'dinein'
+      ? '<span class="tag" data-tag="' + c.id + '">只记金额</span>'
+      : '';
+    return '' +
+      '<div class="card chan" data-chan="' + c.id + '">' +
+        '<div class="chan-head">' +
+          '<i class="dot" style="background:' + c.color + '"></i>' + esc(c.name) + tag +
+        '</div>' +
+        '<div class="inp">' +
+          '<span>¥</span>' +
+          '<input type="text" inputmode="decimal" data-path="' + c.id + '.rev" ' +
+                 'placeholder="' + (label || '0.00') + '" autocomplete="off" enterkeyhint="next" />' +
+        '</div>' +
+      '</div>';
+  }
+
   function buildForm(){
     var dineinWrap = document.getElementById('dineinCards');
     var deliveryWrap = document.getElementById('deliveryCards');
     var di = '', de = '';
 
     CHANNELS.forEach(function(c){
-      if (c.group === 'dinein' && c.moneyOnly) {
+      if (c.group === 'dinein' && c.id === 'qr') {
         di += '' +
-          '<div class="card chan" data-chan="' + c.id + '">' +
+          '<div class="card chan wide" data-chan="' + c.id + '">' +
             '<div class="chan-head">' +
               '<i class="dot" style="background:' + c.color + '"></i>' + esc(c.name) +
-              '<span class="tag" data-tag="' + c.id + '">只记金额</span>' +
-            '</div>' +
-            fieldHTML(c.id + '.rev', '现金营业额', '¥', '', { ph:'0.00' }) +
-            '<div class="avg"><span>不记单量，不计入客单价</span></div>' +
-          '</div>';
-      } else if (c.group === 'dinein') {
-        di += '' +
-          '<div class="card chan" data-chan="' + c.id + '">' +
-            '<div class="chan-head">' +
-              '<i class="dot" style="background:' + c.color + '"></i>' + esc(c.name) +
-            '</div>' +
-            fieldHTML(c.id + '.rev', '营业额', '¥', '', { ph:'0.00' }) +
-            fieldHTML(c.id + '.cnt', '客单量', '', '单', { ph:'0', int:true }) +
-            '<div class="avg"><span>客单价</span><b data-avg="' + c.id + '">¥0.00</b></div>' +
-          '</div>';
-      } else {
-        de += '' +
-          '<div class="card chan" data-chan="' + c.id + '">' +
-            '<div class="chan-head">' +
-              '<i class="dot" style="background:' + c.color + '"></i>' + esc(c.name) +
-              '<span class="tag" data-tag="' + c.id + '">—</span>' +
             '</div>' +
             '<div class="grid2">' +
               fieldHTML(c.id + '.rev', '营业额', '¥', '', { ph:'0.00' }) +
-              fieldHTML(c.id + '.cnt', '单量', '', '单', { ph:'0', int:true }) +
-              fieldHTML(c.id + '.visit', '进店转化率', '', '%', { ph:'0.0' }) +
-              fieldHTML(c.id + '.order', '下单转化率', '', '%', { ph:'0.0' }) +
+              fieldHTML(c.id + '.cnt', '收款笔数', '', '笔', { ph:'0', int:true }) +
             '</div>' +
-            '<div class="avg"><span>客单价</span><b data-avg="' + c.id + '">¥0.00</b></div>' +
+            '<div class="avg"><span>客单价 = 金额 ÷ 笔数</span><b data-avg="' + c.id + '">¥0.00</b></div>' +
           '</div>';
+      } else if (c.group === 'dinein') {
+        di += moneyCard(c);
+      } else {
+        de += moneyCard(c);
       }
     });
 
@@ -1189,7 +1171,8 @@
       '<small>¥</small>' + fmtMoney(s.total.rev, 2).replace(/\.00$/, '');
     document.getElementById('heroDinein').textContent = '¥' + fmtMoney0(s.dinein.rev);
     document.getElementById('heroDelivery').textContent = '¥' + fmtMoney0(s.delivery.rev);
-    document.getElementById('heroOrders').innerHTML = fmtInt(s.total.cnt) + ' <i>单</i>';
+    document.getElementById('heroAvg').textContent =
+      s.ch.qr.cnt > 0 ? '¥' + fmtMoney(s.ch.qr.avg, 2) : '—';
 
     var ratioEl = document.getElementById('heroRatio');
     if (s.total.rev > 0) {
@@ -1206,10 +1189,6 @@
       var st = s.ch[c.id];
       var avgEl = document.querySelector('[data-avg="' + c.id + '"]');
       if (avgEl) avgEl.textContent = st.cnt > 0 ? '¥' + fmtMoney(st.avg, 2) : '—';
-      if (c.group === 'delivery') {
-        var tag = document.querySelector('[data-tag="' + c.id + '"]');
-        if (tag) tag.textContent = st.rev > 0 ? '¥' + fmtMoney0(st.rev) : '—';
-      }
     });
   }
 
@@ -1284,7 +1263,7 @@
       ch: {}, dinein:{ rev:0, cnt:0, billable:0 }, delivery:{ rev:0, cnt:0, billable:0 },
       total:{ rev:0, cnt:0, billable:0 } };
 
-    CHANNELS.forEach(function(c){ agg.ch[c.id] = { rev:0, cnt:0, visitSum:0, visitW:0, orderSum:0, orderW:0 }; });
+    CHANNELS.forEach(function(c){ agg.ch[c.id] = { rev:0, cnt:0 }; });
 
     var series = [];
     var totalDays = diffDays(r.start, r.end) + 1;
@@ -1297,14 +1276,6 @@
         var src = s.ch[c.id], dst = agg.ch[c.id];
         dst.rev += src.rev;
         dst.cnt += src.cnt;
-        if (c.group === 'delivery') {
-          if (src.cnt > 0) {
-            dst.visitSum += src.visit * src.cnt;
-            dst.visitW += src.cnt;
-            dst.orderSum += src.order * src.cnt;
-            dst.orderW += src.cnt;
-          }
-        }
       });
       agg.dinein.rev += s.dinein.rev; agg.dinein.cnt += s.dinein.cnt;
       agg.delivery.rev += s.delivery.rev; agg.delivery.cnt += s.delivery.cnt;
@@ -1326,10 +1297,7 @@
         id: c.id, name: c.name, color: c.color, group: c.group,
         rev: a.rev, cnt: a.cnt,
         avg: a.cnt > 0 ? a.rev / a.cnt : 0,
-        share: agg.total.rev > 0 ? a.rev / agg.total.rev : 0,
-        visit: a.visitW > 0 ? a.visitSum / a.visitW : 0,
-        order: a.orderW > 0 ? a.orderSum / a.orderW : 0,
-        hasConv: a.visitW > 0 || a.orderW > 0
+        share: agg.total.rev > 0 ? a.rev / agg.total.rev : 0
       };
     });
 
@@ -1363,6 +1331,10 @@
     var a = cur.agg, p = prev.agg;
 
     /* KPI */
+    var gpRev = a.ch.groupon.rev;
+    var qrCnt = a.ch.qr.cnt;
+    var qrAvg = qrCnt > 0 ? a.ch.qr.rev / qrCnt : 0;
+    var pctOf = function(v){ return a.total.rev > 0 ? Math.round(v / a.total.rev * 100) : 0; };
     var kpiHTML = '' +
       '<div class="kpi wide">' +
         '<label>总营业额</label>' +
@@ -1370,24 +1342,24 @@
         deltaHTML(a.total.rev, p.total.rev) +
       '</div>' +
       '<div class="kpi">' +
-        '<label>总单量</label>' +
-        '<div class="v">' + fmtInt(a.total.cnt) + '<small style="margin-left:3px">单</small></div>' +
-        deltaHTML(a.total.cnt, p.total.cnt) +
-      '</div>' +
-      '<div class="kpi">' +
-        '<label>综合客单价</label>' +
-        '<div class="v"><small>¥</small>' + fmtMoney(a.total.avg, 2) + '</div>' +
-        deltaHTML(a.total.avg, p.total.avg) +
-      '</div>' +
-      '<div class="kpi">' +
         '<label>堂食营业额</label>' +
         '<div class="v"><small>¥</small>' + fmtMoney(a.dinein.rev, 0) + '</div>' +
-        '<div class="d flat">' + (a.total.rev > 0 ? Math.round(a.dinein.rev / a.total.rev * 100) : 0) + '% 占比</div>' +
+        '<div class="d flat">' + pctOf(a.dinein.rev) + '% 占比</div>' +
       '</div>' +
       '<div class="kpi">' +
         '<label>外卖营业额</label>' +
         '<div class="v"><small>¥</small>' + fmtMoney(a.delivery.rev, 0) + '</div>' +
-        '<div class="d flat">' + (a.total.rev > 0 ? Math.round(a.delivery.rev / a.total.rev * 100) : 0) + '% 占比</div>' +
+        '<div class="d flat">' + pctOf(a.delivery.rev) + '% 占比</div>' +
+      '</div>' +
+      '<div class="kpi">' +
+        '<label>团购金额</label>' +
+        '<div class="v"><small>¥</small>' + fmtMoney(gpRev, 0) + '</div>' +
+        '<div class="d flat">' + pctOf(gpRev) + '% 占比</div>' +
+      '</div>' +
+      '<div class="kpi">' +
+        '<label>客单价（收款码）</label>' +
+        '<div class="v"><small>¥</small>' + (qrCnt > 0 ? fmtMoney(qrAvg, 2) : '—') + '</div>' +
+        '<div class="d flat">' + fmtInt(qrCnt) + ' 笔</div>' +
       '</div>';
     document.getElementById('kpis').innerHTML = kpiHTML;
 
@@ -1409,36 +1381,22 @@
     renderTrend(cur);
 
     /* 明细表 */
-    var rows = '<div class="tr th"><div>渠道</div><div>营业额</div><div>单量</div><div>客单价</div></div>';
+    var rows = '<div class="tr th"><div>渠道</div><div>营业额</div><div>笔数</div><div>占比</div></div>';
     cur.agg.channels.forEach(function(c){
       rows += '<div class="tr">' +
         '<div class="nm"><i style="background:' + c.color + '"></i>' + esc(c.name) + '</div>' +
         '<div class="num">' + (c.rev > 0 ? '¥' + fmtMoney0(c.rev) : '—') + '</div>' +
         '<div class="sub">' + (c.cnt > 0 ? fmtInt(c.cnt) : '—') + '</div>' +
-        '<div class="sub">' + (c.avg > 0 ? '¥' + fmtMoney(c.avg, 2) : '—') + '</div>' +
+        '<div class="sub">' + Math.round(c.share * 100) + '%</div>' +
       '</div>';
     });
     rows += '<div class="tr total">' +
       '<div class="nm">合计</div>' +
       '<div class="num">¥' + fmtMoney0(a.total.rev) + '</div>' +
-      '<div class="sub">' + fmtInt(a.total.cnt) + '</div>' +
-      '<div class="sub">' + (a.total.avg > 0 ? '¥' + fmtMoney(a.total.avg, 2) : '—') + '</div>' +
+      '<div class="sub">' + fmtInt(a.ch.qr.cnt) + '</div>' +
+      '<div class="sub">100%</div>' +
     '</div>';
     document.getElementById('detailTable').innerHTML = rows;
-
-    /* 转化率 */
-    var convRows = cur.agg.channels.filter(function(c){ return c.group === 'delivery'; }).map(function(c){
-      return '<div class="brow">' +
-        '<div class="bn">' + esc(c.name) + '</div>' +
-        '<div class="bt" style="position:relative;">' +
-          '<i style="width:' + Math.min(100, c.visit) + '%;background:' + c.color + ';opacity:.35"></i>' +
-          '<i style="width:' + Math.min(100, c.order) + '%;background:' + c.color + ';position:absolute;left:0;top:0;"></i>' +
-        '</div>' +
-        '<div class="bv">' + (c.hasConv ? c.visit.toFixed(1) + '% → ' + c.order.toFixed(1) + '%' : '—') + '</div>' +
-      '</div>';
-    }).join('');
-    document.getElementById('convBars').innerHTML =
-      convRows + '<div style="font-size:11px;color:#9AA1AE;margin-top:2px;">浅色为进店转化率，深色为下单转化率</div>';
 
     document.getElementById('sumFootnote').textContent =
       '覆盖 ' + a.daysWithData + ' 天有记录 / 区间共 ' + a.days + ' 天';
@@ -1570,7 +1528,7 @@
           '<div class="meta">' +
             '<span>堂食 <b>¥' + fmtMoney0(s.dinein.rev) + '</b></span>' +
             '<span>外卖 <b>¥' + fmtMoney0(s.delivery.rev) + '</b></span>' +
-            '<span><b>' + fmtInt(s.total.cnt) + '</b> 单</span>' +
+            '<span>团购 <b>¥' + fmtMoney0(s.ch.groupon.rev) + '</b></span>' +
           '</div>' +
         '</div>' +
         '<div class="go"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></div>' +
@@ -1609,13 +1567,10 @@
     var dates = Store.allDates().slice().sort();
     if (!dates.length) { toast('还没有数据可以导出'); return; }
 
-    var head = ['日期','收款码营业额','收款码客单量','收款码客单价',
-                '现金营业额',
-                '团购营业额','团购客单量','团购客单价',
-                '美团营业额','美团单量','美团进店转化率(%)','美团下单转化率(%)',
-                '淘宝闪购营业额','淘宝闪购单量','淘宝闪购进店转化率(%)','淘宝闪购下单转化率(%)',
-                '京东营业额','京东单量','京东进店转化率(%)','京东下单转化率(%)',
-                '堂食合计','外卖合计','总营业额','总单量','综合客单价'];
+    var head = ['日期','收款码营业额','收款码笔数','客单价',
+                '现金营业额','团购营业额',
+                '美团营业额','淘宝闪购营业额','京东营业额',
+                '堂食合计','外卖合计','总营业额'];
     var lines = [head.join(',')];
 
     dates.forEach(function(d){
@@ -1625,14 +1580,11 @@
       var qr = s.ch.qr;
       row.push(qr.rev.toFixed(2), qr.cnt, qr.avg.toFixed(2));
       row.push(s.ch.cash.rev.toFixed(2));
-      var gp = s.ch.groupon;
-      row.push(gp.rev.toFixed(2), gp.cnt, gp.avg.toFixed(2));
+      row.push(s.ch.groupon.rev.toFixed(2));
       ['meituan','taobao','jd'].forEach(function(k){
-        var st = s.ch[k];
-        row.push(st.rev.toFixed(2), st.cnt, st.visit.toFixed(2), st.order.toFixed(2));
+        row.push(s.ch[k].rev.toFixed(2));
       });
-      row.push(s.dinein.rev.toFixed(2), s.delivery.rev.toFixed(2),
-               s.total.rev.toFixed(2), s.total.cnt, s.total.avg.toFixed(2));
+      row.push(s.dinein.rev.toFixed(2), s.delivery.rev.toFixed(2), s.total.rev.toFixed(2));
       lines.push(row.join(','));
     });
 
@@ -1693,37 +1645,16 @@
 
       var qrAvg = round2(rand(26, 34));
       var qrCnt = Math.round(rand(46, 74) * holidayBoost * noise);
-      var gpAvg = round2(rand(58, 78));
-      var gpCnt = Math.round(rand(8, 18) * holidayBoost * noise);
-
-      var mtAvg = round2(rand(34, 42));
-      var mtCnt = Math.round(rand(22, 42) * holidayBoost * noise);
-      var tbAvg = round2(rand(32, 40));
-      var tbCnt = Math.round(rand(6, 16) * holidayBoost * noise);
-      var jdAvg = round2(rand(36, 46));
-      var jdCnt = Math.round(rand(2, 8) * holidayBoost * noise);
 
       var rec = blankRec(d);
       rec.ch.qr.rev = round2(qrAvg * qrCnt).toFixed(2);
       rec.ch.qr.cnt = String(qrCnt);
       rec.ch.cash.rev = round2(rand(110, 320) * holidayBoost * noise).toFixed(2);
-      rec.ch.groupon.rev = round2(gpAvg * gpCnt).toFixed(2);
-      rec.ch.groupon.cnt = String(gpCnt);
+      rec.ch.groupon.rev = round2(rand(620, 1500) * holidayBoost * noise).toFixed(2);
 
-      rec.ch.meituan.rev = round2(mtAvg * mtCnt).toFixed(2);
-      rec.ch.meituan.cnt = String(mtCnt);
-      rec.ch.meituan.visit = rand(12, 21).toFixed(1);
-      rec.ch.meituan.order = rand(19, 31).toFixed(1);
-
-      rec.ch.taobao.rev = round2(tbAvg * tbCnt).toFixed(2);
-      rec.ch.taobao.cnt = String(tbCnt);
-      rec.ch.taobao.visit = rand(9, 17).toFixed(1);
-      rec.ch.taobao.order = rand(16, 27).toFixed(1);
-
-      rec.ch.jd.rev = round2(jdAvg * jdCnt).toFixed(2);
-      rec.ch.jd.cnt = String(jdCnt);
-      rec.ch.jd.visit = rand(7, 14).toFixed(1);
-      rec.ch.jd.order = rand(14, 24).toFixed(1);
+      rec.ch.meituan.rev = round2(rand(820, 1600) * holidayBoost * noise).toFixed(2);
+      rec.ch.taobao.rev = round2(rand(220, 560) * holidayBoost * noise).toFixed(2);
+      rec.ch.jd.rev = round2(rand(90, 280) * holidayBoost * noise).toFixed(2);
 
       rec.updatedAt = Date.now();
       db.reports[d] = rec;
