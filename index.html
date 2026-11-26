@@ -611,6 +611,46 @@
   .rec .go{color:#C9CDD5;flex:none;}
 
   /* ---------- 工具区 ---------- */
+  /* ---------- 同步卡片 ---------- */
+  .sync-card{
+    background:var(--card);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow);
+    padding:14px 15px;
+    margin-top:18px;
+  }
+  .sync-head{
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    font-size:13.5px;
+    font-weight:620;
+    letter-spacing:-.01em;
+  }
+  .sync-head b{font-size:11.5px;font-weight:560;color:var(--ink3);}
+  .sync-head b.ok{color:var(--teal);}
+  .sync-head b.err{color:#D25B4C;}
+  .sync-tip{font-size:11.5px;color:var(--ink3);line-height:1.65;margin:7px 0 0;}
+  .sync-code{
+    display:flex;align-items:center;gap:8px;
+    background:var(--line2);border-radius:10px;
+    padding:9px 12px;margin-top:10px;
+  }
+  .sync-code code{
+    flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    font-size:13px;font-weight:600;color:var(--ink);letter-spacing:.02em;
+  }
+  .sync-actions{display:flex;align-items:center;gap:8px;margin-top:11px;flex-wrap:wrap;}
+  .mini{
+    background:var(--line2);
+    color:var(--ink2);
+    border-radius:9px;
+    padding:8px 12px;
+    font-size:12.5px;
+    font-weight:560;
+  }
+  .mini:active{background:#EBEDF2;}
+
   .tools{
     background:var(--card);
     border-radius:var(--radius);
@@ -812,6 +852,23 @@
     </div>
     <div id="recordList"></div>
 
+    <div class="sync-card" id="syncCard">
+      <div class="sync-head">
+        <span>数据同步</span>
+        <b id="syncStatus">未开启</b>
+      </div>
+      <p class="sync-tip" id="syncTip">开启后，把同步码发到另一台手机，两边填的数据会自动互相同步。</p>
+      <div class="sync-code hide" id="syncCodeWrap">
+        <code id="syncCode">—</code>
+        <button class="mini" id="syncCopy" type="button">复制</button>
+      </div>
+      <div class="sync-actions">
+        <button class="d-go" id="syncEnable" type="button">开启同步</button>
+        <button class="mini" id="syncJoin" type="button">输入同步码</button>
+        <button class="mini" id="syncNow" type="button">立即同步</button>
+      </div>
+    </div>
+
     <div class="tools">
       <button class="tool" id="btnExportCsv">
         <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h5"/></svg>
@@ -842,7 +899,7 @@
         <span>清空所有数据</span>
       </button>
     </div>
-    <div class="footnote">数据保存在本机浏览器，请定期导出备份</div>
+    <div class="footnote">数据默认存在本机，开启同步后可在多台手机间互通</div>
     <input type="file" id="fileInput" accept="application/json,.json" style="display:none" />
   </main>
 
@@ -1217,6 +1274,7 @@
   function persist(){
     if (Store.hasData(state.rec)) Store.set(state.date, state.rec);
     else Store.remove(state.date);
+    syncPush();
   }
 
   function markSaved(){
@@ -1707,6 +1765,196 @@
   }
 
   /* =========================================================
+     多端同步：公共中转（ntfy.sh），同步码即频道
+     ========================================================= */
+  var SYNC_KEY = 'storereport.sync';
+  var SYNC_BASE = 'https://ntfy.sh/';
+  var SYNC_DAYS = 45;
+  var syncTimer = null;
+
+  var Sync = {
+    read: function(){
+      try {
+        var c = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
+        if (c && typeof c === 'object') {
+          return { on: !!c.on, code: c.code || '', lastBody: c.lastBody || '', lastAt: Number(c.lastAt) || 0 };
+        }
+      } catch (e) {}
+      return { on:false, code:'', lastBody:'', lastAt:0 };
+    },
+    write: function(c){
+      try { localStorage.setItem(SYNC_KEY, JSON.stringify(c)); } catch (e) {}
+    },
+    newCode: function(){
+      var cs = 'abcdefghijkmnpqrstuvwxyz23456789', s = 'md';
+      for (var i = 0; i < 16; i++) s += cs.charAt(Math.floor(Math.random() * cs.length));
+      return s;
+    }
+  };
+
+  function timeLabel(ts){
+    var d = new Date(ts);
+    return pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function syncStatusSet(text, cls){
+    var el = document.getElementById('syncStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.className = cls || '';
+  }
+
+  function syncRender(){
+    var c = Sync.read();
+    var on = c.on && c.code;
+    document.getElementById('syncEnable').textContent = on ? '换一个同步码' : '开启同步';
+    document.getElementById('syncCodeWrap').classList.toggle('hide', !on);
+    if (on) document.getElementById('syncCode').textContent = c.code;
+    document.getElementById('syncTip').textContent = on
+      ? '把这串同步码填到另一台手机的「输入同步码」里，两边就能互相同步。两台手机都要保持同步开启。'
+      : '开启后，把同步码发到另一台手机，两边填的数据会自动互相同步。';
+    if (!on) syncStatusSet('未开启', '');
+    else if (c.lastAt) syncStatusSet('已同步 ' + timeLabel(c.lastAt), 'ok');
+    else syncStatusSet('等待同步', '');
+  }
+
+  /* 最近 N 天的紧凑快照：一天一行，字段用 | 分隔 */
+  function syncSnapshot(){
+    var db = Store.read();
+    var from = addDays(todayStr(), -SYNC_DAYS);
+    var lines = ['v1'];
+    Object.keys(db.reports).sort().forEach(function(d){
+      if (d < from) return;
+      var r = normalize(db.reports[d], d);
+      lines.push([d, r.ch.qr.rev, r.ch.qr.cnt, r.ch.cash.rev, r.ch.groupon.rev,
+                  r.ch.meituan.rev, r.ch.taobao.rev, r.ch.jd.rev,
+                  r.updatedAt || 0].join('|'));
+    });
+    return lines.join('\n');
+  }
+
+  /* 合并：同一天以 updatedAt 更新的一方为准 */
+  function syncMerge(text){
+    var lines = String(text || '').split('\n');
+    if (lines[0] !== 'v1') return 0;
+    var db = Store.read(), changed = 0;
+    for (var i = 1; i < lines.length; i++){
+      var p = lines[i].split('|');
+      if (p.length < 9) continue;
+      var date = p[0];
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+      var ts = Number(p[8]) || 0;
+      var cur = db.reports[date];
+      if (cur && (Number(cur.updatedAt) || 0) >= ts) continue;
+      var rec = blankRec(date);
+      rec.ch.qr.rev = p[1]; rec.ch.qr.cnt = p[2];
+      rec.ch.cash.rev = p[3];
+      rec.ch.groupon.rev = p[4];
+      rec.ch.meituan.rev = p[5];
+      rec.ch.taobao.rev = p[6];
+      rec.ch.jd.rev = p[7];
+      rec.updatedAt = ts || Date.now();
+      db.reports[date] = rec;
+      changed++;
+    }
+    if (changed) Store.write(db);
+    return changed;
+  }
+
+  function syncPush(force){
+    var c = Sync.read();
+    if (!c.on || !c.code) return;
+    var body = syncSnapshot();
+    if (!force && body === c.lastBody) return;
+    fetch(SYNC_BASE + c.code, { method:'POST', body: body })
+      .then(function(r){
+        if (!r.ok) throw new Error('http ' + r.status);
+        c.lastBody = body;
+        c.lastAt = Date.now();
+        Sync.write(c);
+        syncStatusSet('已同步 ' + timeLabel(c.lastAt), 'ok');
+      })
+      .catch(function(){ syncStatusSet('同步失败，稍后自动重试', 'err'); });
+  }
+
+  function syncPull(){
+    var c = Sync.read();
+    if (!c.on || !c.code) return Promise.resolve(0);
+    syncStatusSet('同步中…', '');
+    var since = Math.floor(Date.now() / 1000) - 43200;
+    return fetch(SYNC_BASE + c.code + '/json?poll=1&since=' + since)
+      .then(function(r){
+        if (!r.ok) throw new Error('http ' + r.status);
+        return r.text();
+      })
+      .then(function(txt){
+        var total = 0;
+        txt.split('\n').forEach(function(line){
+          if (!line) return;
+          var m;
+          try { m = JSON.parse(line); } catch (e) { return; }
+          if (m.event !== 'message' || !m.message) return;
+          total += syncMerge(m.message);
+        });
+        c.lastAt = Date.now();
+        Sync.write(c);
+        syncStatusSet('已同步 ' + timeLabel(c.lastAt), 'ok');
+        return total;
+      })
+      .catch(function(){
+        syncStatusSet('同步失败，稍后自动重试', 'err');
+        return 0;
+      });
+  }
+
+  function syncAfterChange(n){
+    if (!n) return;
+    renderList();
+    renderSummary();
+    var ae = document.activeElement;
+    if (!ae || ae.tagName !== 'INPUT') fillForm();
+    toast('已同步 ' + n + ' 天数据');
+  }
+
+  function syncTick(){
+    if (document.hidden) return;
+    syncPull().then(syncAfterChange);
+  }
+
+  function syncListen(){
+    clearInterval(syncTimer);
+    syncTimer = setInterval(syncTick, 20000);
+  }
+
+  function syncStart(){
+    syncRender();
+    var c = Sync.read();
+    if (!c.on || !c.code) return;
+    syncPull().then(function(n){
+      syncAfterChange(n);
+      syncPush();
+    });
+    syncListen();
+  }
+
+  function copyText(txt, okMsg){
+    var ok = function(){ toast(okMsg || '已复制'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(ok).catch(fallback);
+    } else fallback();
+    function fallback(){
+      var ta = document.createElement('textarea');
+      ta.value = txt;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); ok(); } catch (e) { toast('请长按手动复制'); }
+      document.body.removeChild(ta);
+    }
+  }
+
+  /* =========================================================
      导出 / 导入
      ========================================================= */
   function download(filename, content, mime){
@@ -1869,6 +2117,57 @@
      事件绑定
      ========================================================= */
   function bind(){
+    /* 同步 */
+    document.getElementById('syncEnable').addEventListener('click', function(){
+      var c = Sync.read();
+      if (c.on && c.code) {
+        if (!window.confirm('换一个同步码后，旧码作废，另一台手机需要重新输入新码。继续？')) return;
+      } else if (!window.confirm('开启后，数据会经由公共中转服务（ntfy.sh）在手机之间传递，只有知道同步码的设备能收到。继续？')) {
+        return;
+      }
+      c = { on:true, code: Sync.newCode(), lastBody:'', lastAt:0 };
+      Sync.write(c);
+      syncRender();
+      syncPush(true);
+      syncListen();
+      toast('同步已开启');
+    });
+    document.getElementById('syncJoin').addEventListener('click', function(){
+      var v = window.prompt('输入另一台手机上的同步码', '');
+      if (v === null) return;
+      v = v.trim().toLowerCase();
+      if (!/^md[a-z0-9]{10,24}$/.test(v)) { toast('同步码格式不对，应为 md 开头的 18 位左右'); return; }
+      var c = Sync.read();
+      c.on = true; c.code = v; c.lastBody = ''; c.lastAt = 0;
+      Sync.write(c);
+      syncRender();
+      syncListen();
+      syncPull().then(function(n){
+        syncAfterChange(n);
+        if (!n) toast('同步已连接，暂无新数据');
+      });
+    });
+    document.getElementById('syncNow').addEventListener('click', function(){
+      var c = Sync.read();
+      if (!c.on || !c.code) { toast('请先开启同步或输入同步码'); return; }
+      syncPull().then(function(n){
+        syncAfterChange(n);
+        if (!n) toast('已是最新');
+      });
+      syncPush(true);
+    });
+    document.getElementById('syncCopy').addEventListener('click', function(){
+      var c = Sync.read();
+      if (!c.code) return;
+      copyText(c.code, '同步码已复制');
+    });
+    document.addEventListener('visibilitychange', function(){
+      if (!document.hidden) {
+        var c = Sync.read();
+        if (c.on && c.code) syncPull().then(syncAfterChange);
+      }
+    });
+
     /* 口述填数 */
     document.getElementById('dictateToggle').addEventListener('click', function(){
       document.getElementById('dictatePanel').classList.toggle('hide');
@@ -2066,6 +2365,7 @@
     refreshPassState();
     fillForm();
     renderSummary();
+    syncStart();
 
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
       navigator.serviceWorker.register('./sw.js').catch(function(){});
