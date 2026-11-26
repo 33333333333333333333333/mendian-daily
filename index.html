@@ -137,6 +137,62 @@
     vertical-align:1px;
   }
 
+  /* ---------- 口述填数 ---------- */
+  .dictate{margin-bottom:14px;}
+  .d-toggle{
+    width:100%;
+    display:flex;align-items:center;justify-content:center;gap:7px;
+    background:var(--card);
+    border:1.5px dashed #D9DCE3;
+    border-radius:14px;
+    padding:11px;
+    font-size:13px;
+    font-weight:560;
+    color:var(--ink2);
+    letter-spacing:-.01em;
+    transition:border-color .15s,color .15s;
+  }
+  .d-toggle:active{border-color:var(--brand);color:var(--brand);}
+  .d-panel{
+    background:var(--card);
+    border-radius:var(--radius);
+    box-shadow:var(--shadow);
+    padding:13px 15px;
+    margin-top:10px;
+  }
+  .d-panel textarea{
+    width:100%;
+    box-sizing:border-box;
+    border:none;
+    outline:none;
+    background:var(--line2);
+    border-radius:10px;
+    padding:10px 12px;
+    font-family:inherit;
+    font-size:14.5px;
+    line-height:1.55;
+    color:var(--ink);
+    resize:none;
+  }
+  .d-panel textarea:focus{background:#fff;box-shadow:0 0 0 2px rgba(241,89,43,.18);}
+  .d-actions{display:flex;align-items:center;gap:10px;margin-top:10px;}
+  .d-go{
+    flex:none;
+    background:var(--brand);
+    color:#fff;
+    border-radius:10px;
+    padding:9px 16px;
+    font-size:13.5px;
+    font-weight:600;
+    letter-spacing:-.01em;
+  }
+  .d-go:active{opacity:.85;}
+  .d-hint{font-size:11px;color:var(--ink3);}
+  .d-result{font-size:12px;color:var(--ink2);margin-top:9px;line-height:1.6;display:none;}
+  .d-result.on{display:block;}
+  .d-result b{color:var(--ink);font-weight:620;}
+  .d-result .bad{color:#D25B4C;}
+
   /* ---------- Hero ---------- */
   .hero{
     background:linear-gradient(150deg,#22252C 0%,#15171C 100%);
@@ -662,6 +718,18 @@
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
       </button>
       <input type="date" id="datePicker" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0;" />
+    </div>
+
+    <div class="dictate" id="dictateBox">
+      <button class="d-toggle" id="dictateToggle" type="button">说一段话，自动填数</button>
+      <div class="d-panel hide" id="dictatePanel">
+        <textarea id="dictateText" rows="3" placeholder="例：收款码2000，50笔，现金800，团购1200，美团900，淘宝闪购300，京东150"></textarea>
+        <div class="d-actions">
+          <button class="d-go" id="dictateBtn" type="button">识别并填入</button>
+          <span class="d-hint">手机上可用键盘自带的语音输入说话</span>
+        </div>
+        <div class="d-result" id="dictateResult"></div>
+      </div>
     </div>
 
     <div class="hero">
@@ -1217,6 +1285,98 @@
   }
 
   /* =========================================================
+     口述填数 —— 一段话识别成数据
+     ========================================================= */
+  var CH_WORDS = [
+    { id:'qr',      re:'收款码|二维码|扫码' },
+    { id:'cash',    re:'现金' },
+    { id:'groupon', re:'团购' },
+    { id:'meituan', re:'美团' },
+    { id:'taobao',  re:'淘宝闪购|淘宝|闪购' },
+    { id:'jd',      re:'京东' }
+  ];
+
+  function parseSpeechText(raw){
+    var text = String(raw || '')
+      .replace(/(\d),(\d)/g, '$1$2')   /* 2,000 → 2000 */
+      .replace(/(\d+(?:\.\d+)?)\s*万/g, function(_, n){ return String(parseFloat(n) * 10000); })
+      .replace(/(\d+(?:\.\d+)?)\s*千/g, function(_, n){ return String(parseFloat(n) * 1000); });
+
+    var big = new RegExp('(' + CH_WORDS.map(function(k){ return k.re; }).join('|') + ')', 'g');
+    var hits = [], m;
+    while ((m = big.exec(text)) !== null) {
+      var id = '';
+      CH_WORDS.forEach(function(k){
+        if (!id && new RegExp('^(?:' + k.re + ')$').test(m[1])) id = k.id;
+      });
+      if (id) hits.push({ id: id, idx: m.index, len: m[0].length });
+    }
+
+    var res = {};
+    var isCount = function(n){ return /笔|单|客|个/.test(n.unit); };
+    for (var i = 0; i < hits.length; i++) {
+      var seg = text.slice(hits[i].idx + hits[i].len,
+                           i + 1 < hits.length ? hits[i+1].idx : text.length);
+      var nums = [], nm;
+      var nre = /(\d+(?:\.\d+)?)\s*(笔|单|客|个|元|块)?/g;
+      while ((nm = nre.exec(seg)) !== null) {
+        if (nm[1] !== undefined) nums.push({ v: parseFloat(nm[1]), unit: nm[2] || '' });
+      }
+      if (!nums.length) continue;
+      var out = res[hits[i].id] || (res[hits[i].id] = {});
+      if (hits[i].id === 'qr' && out.rev === undefined) {
+        var revN = null, cntN = null;
+        nums.forEach(function(n){ if (revN === null && !isCount(n)) revN = n; });
+        if (!revN) revN = nums[0];
+        nums.forEach(function(n){ if (cntN === null && isCount(n) && n !== revN) cntN = n; });
+        if (cntN === null && nums.length > 1) {
+          nums.forEach(function(n){ if (cntN === null && n !== revN) cntN = n; });
+        }
+        out.rev = revN.v;
+        if (cntN !== null) out.cnt = Math.round(cntN.v);
+      } else if (out.rev === undefined) {
+        out.rev = nums[0].v;
+      }
+    }
+    return res;
+  }
+
+  function setField(path, v){
+    var el = document.querySelector('input[data-path="' + path + '"]');
+    if (el) el.value = String(v);
+  }
+
+  function applyParsed(p){
+    var names = [];
+    CHANNELS.forEach(function(c){
+      var d = p[c.id];
+      if (!d) return;
+      if (d.rev !== undefined) {
+        state.rec.ch[c.id].rev = String(d.rev);
+        setField(c.id + '.rev', d.rev);
+        names.push(c.name + ' ¥' + fmtMoney0(d.rev));
+      }
+      if (d.cnt !== undefined) {
+        state.rec.ch[c.id].cnt = String(d.cnt);
+        setField(c.id + '.cnt', d.cnt);
+        names.push(d.cnt + '笔');
+      }
+    });
+    refreshFillNumbers();
+    persist();
+    markSaved();
+    var box = document.getElementById('dictateResult');
+    box.classList.add('on');
+    if (names.length) {
+      box.innerHTML = '识别到：<b>' + esc(names.join('，')) + '</b>，已填入下方，请核对无误';
+      toast('已识别填入，请核对');
+    } else {
+      box.innerHTML = '<span class="bad">没有识别出数据</span>——每项带上渠道名，例如「收款码2000，50笔」「美团900」';
+      toast('没识别出数据');
+    }
+  }
+
+  /* =========================================================
      汇总计算
      ========================================================= */
   function getRange(){
@@ -1709,6 +1869,14 @@
      事件绑定
      ========================================================= */
   function bind(){
+    /* 口述填数 */
+    document.getElementById('dictateToggle').addEventListener('click', function(){
+      document.getElementById('dictatePanel').classList.toggle('hide');
+    });
+    document.getElementById('dictateBtn').addEventListener('click', function(){
+      applyParsed(parseSpeechText(document.getElementById('dictateText').value));
+    });
+
     /* 日期 */
     document.getElementById('prevDay').addEventListener('click', function(){
       flushSave();
